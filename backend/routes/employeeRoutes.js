@@ -1,139 +1,137 @@
+
 const express = require("express");
 const router = express.Router();
 const Employee = require("../models/Employee");
 
-// GET: Lấy danh sách nhân viên và tìm kiếm theo mã hoặc họ tên
+// GET: Danh sach va tim kiem nhan vien
 router.get("/", async (req, res) => {
     try {
-        const { search } = req.query;
+        const search = String(req.query.search || "").trim();
 
-        let filter = {};
+        // Lay danh sach nhan vien tu MongoDB
+        let employees = await Employee.find({})
+            .sort({ createdAt: -1 })
+            .maxTimeMS(8000)
+            .exec();
 
+        // Loc theo ma nhan vien hoac ho ten
         if (search) {
-            filter = {
-                $or: [
-                    { employeeId: { $regex: search, $options: "i" } },
-                    { fullName: { $regex: search, $options: "i" } }
-                ]
-            };
+            const keyword = search.toLowerCase();
+
+            employees = employees.filter((employee) => {
+                const employeeId = String(employee.employeeId || "").toLowerCase();
+                const fullName = String(employee.fullName || "").toLowerCase();
+
+                return employeeId.includes(keyword) ||
+                       fullName.includes(keyword);
+            });
         }
 
-        const employees = await Employee.find(filter).sort({ createdAt: -1 });
-
-        res.status(200).json({
+        return res.status(200).json({
             success: true,
             count: employees.length,
             data: employees
         });
     } catch (error) {
-        res.status(500).json({
+        console.error("GET employees error:", error.message);
+
+        return res.status(500).json({
             success: false,
-            message: "Lỗi khi lấy danh sách nhân viên",
+            message: "Khong the lay danh sach nhan vien",
             error: error.message
         });
     }
 });
 
-// GET: Lấy thông tin một nhân viên theo mã nhân viên
+// GET: Lay nhan vien theo ma
 router.get("/:id", async (req, res) => {
     try {
         const employee = await Employee.findOne({
             employeeId: req.params.id
-        });
+        }).maxTimeMS(8000).exec();
 
         if (!employee) {
             return res.status(404).json({
                 success: false,
-                message: "Không tìm thấy nhân viên"
+                message: "Khong tim thay nhan vien"
             });
         }
 
-        res.status(200).json({
+        return res.status(200).json({
             success: true,
             data: employee
         });
     } catch (error) {
-        res.status(500).json({
+        console.error("GET employee error:", error.message);
+
+        return res.status(500).json({
             success: false,
-            message: "Lỗi khi lấy thông tin nhân viên",
+            message: "Loi khi lay nhan vien",
             error: error.message
         });
     }
 });
 
- // POST: Thêm nhân viên mới
+// POST: Them nhan vien
 router.post("/", async (req, res) => {
     try {
-        const {
-            employeeId,
-            fullName,
-            gender,
-            dateOfBirth,
-            department,
-            position,
-            email,
-            phone,
-            hireDate,
-            status
-        } = req.body;
+        const required = [
+            "employeeId", "fullName", "gender", "dateOfBirth",
+            "department", "position", "email", "phone", "hireDate"
+        ];
 
-        const newEmployee = new Employee({
-            employeeId,
-            fullName,
-            gender,
-            dateOfBirth,
-            department,
-            position,
-            email,
-            phone,
-            hireDate,
-            status
-        });
+        const missing = required.filter(
+            (field) => !String(req.body[field] ?? "").trim()
+        );
 
-        const savedEmployee = await newEmployee.save();
+        if (missing.length > 0) {
+            return res.status(400).json({
+                success: false,
+                message: "Thieu truong bat buoc",
+                fields: missing
+            });
+        }
 
-        res.status(201).json({
+        const employee = await Employee.create(req.body);
+
+        return res.status(201).json({
             success: true,
-            message: "Thêm nhân viên thành công",
-            data: savedEmployee
+            message: "Them nhan vien thanh cong",
+            data: employee
         });
     } catch (error) {
         if (error.code === 11000) {
             return res.status(409).json({
                 success: false,
-                message: "Mã nhân viên hoặc email đã tồn tại"
+                message: "Ma nhan vien hoac email da ton tai"
             });
         }
 
-        if (error.name === "ValidationError") {
+        if (error.name === "ValidationError" ||
+            error.name === "CastError") {
             return res.status(400).json({
                 success: false,
-                message: "Dữ liệu nhân viên không hợp lệ",
-                errors: Object.values(error.errors).map(item => item.message)
+                message: "Du lieu khong hop le",
+                error: error.message
             });
         }
 
-        res.status(500).json({
+        console.error("POST employee error:", error.message);
+
+        return res.status(500).json({
             success: false,
-            message: "Lỗi khi thêm nhân viên",
+            message: "Loi khi them nhan vien",
             error: error.message
         });
     }
 });
 
- // PUT: Cập nhật thông tin nhân viên theo mã nhân viên
+// PUT: Cap nhat nhan vien theo ma
 router.put("/:id", async (req, res) => {
     try {
         const allowedFields = [
-            "fullName",
-            "gender",
-            "dateOfBirth",
-            "department",
-            "position",
-            "email",
-            "phone",
-            "hireDate",
-            "status"
+            "fullName", "gender", "dateOfBirth", "department",
+            "position", "email", "phone", "hireDate", "status"
         ];
 
         const updates = {};
@@ -144,74 +142,83 @@ router.put("/:id", async (req, res) => {
             }
         }
 
-        const updatedEmployee = await Employee.findOneAndUpdate(
-            { employeeId: req.params.id },
-            { $set: updates },
-            {
-                new: true,
-                runValidators: true
-            }
-        );
-
-        if (!updatedEmployee) {
-            return res.status(404).json({
+        if (Object.keys(updates).length === 0) {
+            return res.status(400).json({
                 success: false,
-                message: "Không tìm thấy nhân viên cần cập nhật"
+                message: "Khong co truong hop le de cap nhat"
             });
         }
 
-        res.status(200).json({
+        const employee = await Employee.findOneAndUpdate(
+            { employeeId: req.params.id },
+            { $set: updates },
+            { new: true, runValidators: true }
+        ).exec();
+
+        if (!employee) {
+            return res.status(404).json({
+                success: false,
+                message: "Khong tim thay nhan vien"
+            });
+        }
+
+        return res.status(200).json({
             success: true,
-            message: "Cập nhật nhân viên thành công",
-            data: updatedEmployee
+            message: "Cap nhat thanh cong",
+            data: employee
         });
     } catch (error) {
         if (error.code === 11000) {
             return res.status(409).json({
                 success: false,
-                message: "Email đã được sử dụng bởi nhân viên khác"
+                message: "Ma nhan vien hoac email da ton tai"
             });
         }
 
-        if (error.name === "ValidationError") {
+        if (error.name === "ValidationError" ||
+            error.name === "CastError") {
             return res.status(400).json({
                 success: false,
-                message: "Dữ liệu cập nhật không hợp lệ",
-                errors: Object.values(error.errors).map(item => item.message)
+                message: "Du lieu khong hop le",
+                error: error.message
             });
         }
 
-        res.status(500).json({
+        console.error("PUT employee error:", error.message);
+
+        return res.status(500).json({
             success: false,
-            message: "Lỗi khi cập nhật nhân viên",
+            message: "Loi khi cap nhat",
             error: error.message
         });
     }
 });
 
-// DELETE: Xóa nhân viên theo mã nhân viên
+// DELETE: Xoa nhan vien theo ma
 router.delete("/:id", async (req, res) => {
     try {
-        const deletedEmployee = await Employee.findOneAndDelete({
+        const employee = await Employee.findOneAndDelete({
             employeeId: req.params.id
-        });
+        }).exec();
 
-        if (!deletedEmployee) {
+        if (!employee) {
             return res.status(404).json({
                 success: false,
-                message: "Không tìm thấy nhân viên cần xóa"
+                message: "Khong tim thay nhan vien"
             });
         }
 
-        res.status(200).json({
+        return res.status(200).json({
             success: true,
-            message: "Xóa nhân viên thành công",
-            data: deletedEmployee
+            message: "Xoa nhan vien thanh cong",
+            data: employee
         });
     } catch (error) {
-        res.status(500).json({
+        console.error("DELETE employee error:", error.message);
+
+        return res.status(500).json({
             success: false,
-            message: "Lỗi khi xóa nhân viên",
+            message: "Loi khi xoa nhan vien",
             error: error.message
         });
     }
